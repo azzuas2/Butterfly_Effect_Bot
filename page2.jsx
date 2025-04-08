@@ -1,0 +1,984 @@
+"use client";
+import React from "react";
+
+import {
+  useUpload,
+  useHandleStreamResponse,
+} from "../utilities/runtime-helpers";
+
+function MainComponent() {
+  const [messages, setMessages] = useState([]);
+  const [inputText, setInputText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [shake, setShake] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [poetry, setPoetry] = useState(null);
+  const messagesEndRef = useRef(null);
+  const hasSpokenRef = useRef(false);
+  const [selectedLanguage, setSelectedLanguage] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("selectedLanguage") || "en";
+    }
+    return "en";
+  });
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+  const languages = [
+    { code: "en", name: "English", nativeName: "English" },
+    {
+      code: "ur",
+      name: "Urdu",
+      nativeName: "اردو",
+      fontClass: "font-noto-nastaliq",
+    },
+    {
+      code: "hi",
+      name: "Hindi",
+      nativeName: "हिन्दी",
+      fontClass: "font-noto-devanagari",
+    },
+    {
+      code: "ta",
+      name: "Tamil",
+      nativeName: "தமிழ்",
+      fontClass: "font-noto-tamil",
+    },
+    {
+      code: "te",
+      name: "Telugu",
+      nativeName: "తెలుగు",
+      fontClass: "font-noto-telugu",
+    },
+    {
+      code: "bn",
+      name: "Bengali",
+      nativeName: "বাংলা",
+      fontClass: "font-noto-bengali",
+    },
+    {
+      code: "ar",
+      name: "Arabic",
+      nativeName: "العربية",
+      fontClass: "font-noto-arabic",
+    },
+    { code: "es", name: "Spanish", nativeName: "Español" },
+    { code: "fr", name: "French", nativeName: "Français" },
+    { code: "de", name: "German", nativeName: "Deutsch" },
+  ];
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+  const formatDate = (date) => {
+    return new Date(date).toLocaleString(selectedLanguage, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+  const [pageError, setPageError] = useState(null);
+  const handleRetry = () => {
+    setPageError(null);
+    window.location.reload();
+  };
+  const handleLanguageChange = async (langCode) => {
+    setSelectedLanguage(langCode);
+    setShowLanguageSelector(false);
+    setIsTranslating(true);
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("selectedLanguage", langCode);
+    }
+
+    try {
+      const response = await fetch(
+        "/integrations/google-translate/language/translate/v2",
+        {
+          method: "POST",
+          body: new URLSearchParams({
+            q: inputText,
+            target: langCode,
+            source: "en",
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Translation failed");
+      }
+
+      const data = await response.json();
+      if (data.data?.translations?.[0]?.translatedText) {
+        setInputText(data.data.translations[0].translatedText);
+      }
+    } catch (error) {
+      console.error("Translation error:", error);
+      setError("Failed to translate text");
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  if (pageError) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-center bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl">
+          <div className="text-red-500 mb-4">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-12 w-12 mx-auto"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
+          <h2 className="text-xl font-semibold mb-4">Something went wrong</h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">
+            We're sorry for the inconvenience. Please try again.
+          </p>
+          <button
+            onClick={handleRetry}
+            className="px-6 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const examplePrompts = [
+    "I drank soda instead of water",
+    "I walked for 5 minutes",
+    "I skipped breakfast today",
+    "I meditated for 10 minutes",
+    "I stayed up late scrolling",
+    "I took the stairs instead of elevator",
+    "I read a book for 15 minutes",
+    "I had a healthy breakfast",
+  ];
+  const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      const interval = setInterval(() => {
+        setCurrentPromptIndex((prev) => (prev + 1) % examplePrompts.length);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [messages.length]);
+
+  useEffect(() => {
+    const loadPoetry = async () => {
+      try {
+        const response = await fetch("/api/get-random-poetry");
+        if (!response.ok) {
+          throw new Error("Failed to load poetry");
+        }
+        const data = await response.json();
+        if (data && data.poetry) {
+          setPoetry(data.poetry);
+        } else {
+          throw new Error("Invalid poetry data");
+        }
+      } catch (err) {
+        console.error("Poetry loading error:", err);
+        setPoetry({
+          poet_name: "Allama Iqbal",
+          urdu_text:
+            "خودی کو کر بلند اتنا کہ ہر تقدیر سے پہلے\nخدا بندے سے خود پوچھے بتا تیری رضا کیا ہے",
+          english_meaning:
+            "Elevate your self so high that before every decree,\nGod himself asks you: Tell me, what is your wish?",
+        });
+      }
+    };
+    loadPoetry();
+  }, []);
+
+  useEffect(() => {
+    if (poetry && !hasSpokenRef.current && typeof window !== "undefined") {
+      const utterance = new SpeechSynthesisUtterance(poetry.english_meaning);
+      window.speechSynthesis.speak(utterance);
+      hasSpokenRef.current = true;
+    }
+  }, [poetry]);
+
+  const [streamingMessage, setStreamingMessage] = useState("");
+  const handleFinish = useCallback((message) => {
+    setMessages((prev) => [...prev, { type: "bot", content: message }]);
+    setStreamingMessage("");
+  }, []);
+  const handleStreamResponse = useHandleStreamResponse({
+    onChunk: setStreamingMessage,
+    onFinish: handleFinish,
+  });
+  const [upload, { loading: uploadLoading }] = useUpload();
+  const handleImageUpload = async (e) => {
+    if (isProcessingImage) {
+      setError("Please wait for the current image analysis to complete");
+      return;
+    }
+
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image must be less than 5MB");
+      return;
+    }
+
+    try {
+      setIsProcessingImage(true);
+      const { url, error: uploadError } = await upload({ file });
+      if (uploadError) {
+        setError(uploadError);
+        return;
+      }
+      setImagePreview(url);
+    } catch (error) {
+      setError("Failed to upload image. Please try again.");
+    } finally {
+      setIsProcessingImage(false);
+    }
+  };
+  const handleSendMessage = async () => {
+    if (isProcessingImage) {
+      setError(
+        "Please wait while I analyze your image and prepare a detailed response"
+      );
+      return;
+    }
+
+    if (!inputText.trim() && !imagePreview) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      setIsProcessingImage(true);
+      const userMessage = {
+        type: "user",
+        content: inputText,
+        image: imagePreview,
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+      setInputText("");
+      setImagePreview(null);
+
+      const chatHistoryResponse = await fetch("/api/save-chat-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message_content: inputText,
+          message_type: "user",
+          image_url: imagePreview,
+        }),
+      });
+
+      if (!chatHistoryResponse.ok) {
+        throw new Error("Failed to save chat history");
+      }
+
+      let messages = [
+        {
+          role: "system",
+          content: `You are the BUTTERFLY EFFECT bot, an AI that analyzes daily habits and provides supportive, encouraging feedback for positive change. Today's date is ${new Date().toLocaleDateString()}.
+
+If anyone asks about the creators or team behind this app, respond with:
+"This app was created by a team of second-year B.Tech AI & DS students from C. Abdul Hakeem College of Engineering and Technology:
+- Team Leader: Mohammed Azhar Sayeed A S
+- Team Members: Mohammed Harris H and Mohammed Maaz Mouzan"
+
+Calculate their ages based on their birth dates:
+- Mohammed Azhar Sayeed A S: Born 22-11-2005
+- Mohammed Harris H: Born 24-06-2006
+- Mohammed Maaz Mouzan: Born 06-08-2005`,
+        },
+      ];
+
+      if (imagePreview) {
+        try {
+          const base64Image = await fetch(imagePreview)
+            .then((r) => r.blob())
+            .then(
+              (blob) =>
+                new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => resolve(reader.result);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(blob);
+                })
+            );
+          const imageResponse = await fetch("/integrations/gpt-vision/", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: "Analyze this image with deep empathy and understanding, especially if it relates to weight or fitness concerns. Provide a structured, supportive response following our guidelines for encouragement and practical advice. What do you see, and how can we best support and guide this person?",
+                    },
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: base64Image,
+                      },
+                    },
+                  ],
+                },
+              ],
+            }),
+          });
+
+          if (!imageResponse.ok) {
+            throw new Error("Failed to analyze image");
+          }
+
+          const imageAnalysis = await imageResponse.json();
+          const botResponse = imageAnalysis.choices[0].message.content;
+
+          const saveBotResponse = await fetch("/api/save-chat-history", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message_content: botResponse,
+              message_type: "bot",
+              image_url: null,
+            }),
+          });
+
+          if (!saveBotResponse.ok) {
+            throw new Error("Failed to save bot response");
+          }
+
+          messages.push({
+            role: "assistant",
+            content: botResponse,
+          });
+        } catch (imageError) {
+          console.error(imageError);
+          throw new Error("Failed to process image");
+        }
+      }
+
+      if (inputText.trim()) {
+        messages.push({
+          role: "user",
+          content: inputText,
+        });
+      }
+
+      const chatResponse = await fetch(
+        "/integrations/chat-gpt/conversationgpt4",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            messages,
+            stream: true,
+          }),
+        }
+      );
+
+      if (!chatResponse.ok) {
+        throw new Error(`Error: ${chatResponse.status}`);
+      }
+
+      handleStreamResponse(chatResponse);
+    } catch (err) {
+      console.error(err);
+      setError("Something went wrong. Please try again.");
+      setPageError("Failed to process your request. Please refresh the page.");
+    } finally {
+      setLoading(false);
+      setIsProcessingImage(false);
+    }
+  };
+  const toggleRecording = () => {
+    setIsRecording(!isRecording);
+  };
+
+  useEffect(() => {
+    let recognition;
+    if (isRecording) {
+      try {
+        recognition = new window.webkitSpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = selectedLanguage;
+
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          setInputText(transcript);
+          setIsRecording(false);
+        };
+
+        recognition.onerror = () => {
+          setError("Failed to recognize speech. Please try again.");
+          setIsRecording(false);
+        };
+
+        recognition.start();
+      } catch (error) {
+        setError("Speech recognition is not supported in your browser.");
+        setIsRecording(false);
+      }
+    }
+    return () => {
+      if (recognition) {
+        recognition.stop();
+      }
+    };
+  }, [isRecording, selectedLanguage]);
+
+  return (
+    <div
+      className="min-h-screen bg-gray-50 dark:bg-gray-900 relative overflow-hidden"
+      style={{
+        backgroundImage:
+          "url('https://ucarecdn.com/1929a631-793e-4598-adc8-6c8dfeb8b528/-/format/auto/')",
+        backgroundRepeat: "repeat",
+        backgroundSize: "300px",
+      }}
+    >
+      <div
+        className={`fixed top-0 right-0 h-full w-80 bg-white/95 dark:bg-gray-800/95 backdrop-blur-lg shadow-2xl transform transition-transform duration-300 z-40 ${
+          showHistory ? "translate-x-0" : "translate-x-[100%]"
+        }`}
+      >
+        <div className="p-4 h-full flex flex-col">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold">Chat History</h2>
+            <button
+              onClick={() => setShowHistory(false)}
+              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {chatHistory.map((msg, index) => (
+              <div
+                key={index}
+                className="mb-4 p-3 rounded-lg bg-white/50 dark:bg-gray-700/50"
+              >
+                <div
+                  className={`text-sm ${
+                    msg.message_type === "user"
+                      ? "text-blue-600"
+                      : "text-green-600"
+                  }`}
+                >
+                  {msg.message_type === "user" ? "You" : "Bot"}
+                </div>
+                <div className="text-sm mt-1">{msg.message_content}</div>
+                {msg.image_url && (
+                  <img
+                    src={msg.image_url}
+                    alt="Chat"
+                    className="mt-2 rounded-md max-h-20"
+                  />
+                )}
+                <div className="text-xs text-gray-500 mt-2">
+                  {formatDate(msg.created_at)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="fixed top-4 right-4 flex gap-2 z-50">
+        <div className="relative">
+          <button
+            onClick={() => setShowLanguageSelector(!showLanguageSelector)}
+            className="p-3 bg-white/70 dark:bg-gray-800/70 backdrop-blur-lg rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center gap-2"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-6 w-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"
+              />
+            </svg>
+            <span className="hidden md:inline">
+              {languages.find((l) => l.code === selectedLanguage)?.nativeName}
+            </span>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className={`h-4 w-4 transition-transform ${
+                showLanguageSelector ? "rotate-180" : ""
+              }`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 9l-7 7-7-7"
+              />
+            </svg>
+          </button>
+          {showLanguageSelector && (
+            <div className="absolute top-full right-0 mt-2 w-48 bg-white/90 dark:bg-gray-800/90 backdrop-blur-lg rounded-xl shadow-lg overflow-hidden z-50">
+              {languages.map((lang) => (
+                <button
+                  key={lang.code}
+                  onClick={() => handleLanguageChange(lang.code)}
+                  className={`w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${
+                    lang.fontClass || ""
+                  }`}
+                >
+                  <span>{lang.nativeName}</span>
+                  {selectedLanguage === lang.code && (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-5 w-5 text-green-500"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="p-3 bg-white/70 dark:bg-gray-800/70 backdrop-blur-lg rounded-full shadow-lg hover:shadow-xl transition-all duration-300"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <div className="max-w-3xl mx-auto p-4 h-screen">
+        <div className="flex flex-col h-full">
+          <div className="text-left mb-8">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+              <img
+                src="https://ucarecdn.com/7a3e3f11-d074-4044-8c45-09175567d4c2/-/format/auto/"
+                alt="Butterfly Effect Logo"
+                className="h-8 w-8 inline-block mr-2"
+              />
+              BUTTERFLY EFFECT
+            </h1>
+            <p className="text-gray-700 dark:text-gray-300">
+              Track your daily habits and see their long-term impact
+            </p>
+          </div>
+          <div className="flex-1 bg-white/70 dark:bg-gray-800/70 backdrop-blur-lg rounded-2xl p-6 mb-4 overflow-y-auto shadow-xl transition-all duration-300">
+            {poetry && (
+              <div className="max-w-2xl mx-auto bg-white/80 dark:bg-gray-800/80 rounded-2xl p-6 shadow-lg relative z-10">
+                <div className="mb-4">
+                  <h3 className="text-xl font-semibold mb-2">
+                    {poetry.poet_name}
+                  </h3>
+                  <p
+                    className="text-xl font-noto-nastaliq text-right leading-loose"
+                    style={{ fontFamily: "Noto Nastaliq Urdu, serif" }}
+                  >
+                    {poetry.urdu_text}
+                  </p>
+                </div>
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                  <p className="text-gray-700 dark:text-gray-300 italic">
+                    {poetry.english_meaning}
+                  </p>
+                </div>
+              </div>
+            )}
+            {messages.length === 0 ? (
+              <div className="text-center space-y-8 py-8">
+                {poetry && (
+                  <div className="max-w-2xl mx-auto bg-white/80 dark:bg-gray-800/80 rounded-2xl p-6 shadow-lg relative z-10">
+                    <div className="mb-4">
+                      <h3 className="text-xl font-semibold mb-2">
+                        {poetry.poet_name}
+                      </h3>
+                      <p
+                        className="text-xl font-noto-nastaliq text-right leading-loose"
+                        style={{ fontFamily: "Noto Nastaliq Urdu, serif" }}
+                      >
+                        {poetry.urdu_text}
+                      </p>
+                    </div>
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                      <p className="text-gray-700 dark:text-gray-300 italic">
+                        {poetry.english_meaning}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <div className="mt-8">
+                  <p className="mb-2 text-gray-500 dark:text-gray-400">
+                    Share your daily habits and I'll predict their long-term
+                    impact
+                  </p>
+                  <p className="text-sm h-6 prompt-animation">
+                    Example: "{examplePrompts[currentPromptIndex]}"
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((message, index) => (
+                  <div
+                    key={index}
+                    className={`flex ${
+                      message.type === "user" ? "justify-end" : "justify-start"
+                    } message-animation`}
+                  >
+                    <div
+                      className={`max-w-[80%] p-4 rounded-2xl shadow-md transition-all duration-300 ${
+                        message.type === "user"
+                          ? "bg-gray-900 text-white"
+                          : "bg-white/90 dark:bg-gray-700/90 text-gray-900 dark:text-white"
+                      }`}
+                    >
+                      {message.content}
+                    </div>
+                  </div>
+                ))}
+                {loading && (
+                  <div className="flex justify-start message-animation">
+                    <div className="bg-white/90 dark:bg-gray-700/90 p-4 rounded-2xl shadow-md flex items-center">
+                      <img
+                        src="https://ucarecdn.com/7a3e3f11-d074-4044-8c45-09175567d4c2/-/format/auto/"
+                        alt="Loading"
+                        className="h-6 w-6 mr-2 loading-spin"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {streamingMessage && (
+              <div className="flex justify-start message-animation">
+                <div className="max-w-[80%] p-4 rounded-2xl shadow-md bg-white/90 dark:bg-gray-700/90 text-gray-900 dark:text-white">
+                  {streamingMessage}
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {error && (
+            <div className="text-red-500 dark:text-red-400 text-sm mb-2">
+              {error}
+            </div>
+          )}
+
+          <div
+            className={`input-container transition-all duration-300 bg-white/70 dark:bg-gray-800/70 backdrop-blur-lg rounded-2xl p-4 shadow-lg ${
+              shake ? "shake-animation" : ""
+            }`}
+          >
+            {imagePreview && (
+              <div className="mb-2 relative">
+                <img
+                  src={imagePreview}
+                  alt="Preview"
+                  className="max-h-40 rounded-lg"
+                />
+                <button
+                  onClick={() => setImagePreview(null)}
+                  className="absolute top-2 right-2 bg-gray-900/80 text-white rounded-full p-1 hover:bg-gray-900"
+                  disabled={isProcessingImage}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <label
+                  className={`cursor-pointer p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors ${
+                    isProcessingImage ? "opacity-50 cursor-not-allowed" : ""
+                  }`}
+                >
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageUpload}
+                    disabled={isProcessingImage}
+                  />
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-6 w-6 text-gray-600 dark:text-gray-300"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                    />
+                  </svg>
+                </label>
+                {isProcessingImage && (
+                  <span className="text-sm text-gray-500">
+                    Processing image...
+                  </span>
+                )}
+                <button
+                  onClick={toggleRecording}
+                  className={`p-3 rounded-xl transition-colors ${
+                    isRecording
+                      ? "bg-red-500 text-white"
+                      : "hover:bg-gray-100 dark:hover:bg-gray-700"
+                  }`}
+                  disabled={isProcessingImage}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className={`h-6 w-6 ${
+                      isRecording ? "recording-pulse" : ""
+                    }`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
+                placeholder={
+                  loading
+                    ? "Analyzing impact..."
+                    : `Type your daily habit... (e.g., "${examplePrompts[currentPromptIndex]}")`
+                }
+                className="flex-1 p-3 rounded-xl border-0 bg-transparent text-gray-900 dark:text-white placeholder-gray-500 focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-300 transition-all duration-300"
+                disabled={isProcessingImage}
+              />
+              <button
+                onClick={handleSendMessage}
+                disabled={loading || isProcessingImage}
+                className="px-4 py-3 bg-gray-900 dark:bg-gray-700 text-white rounded-xl shadow-md hover:shadow-lg transition-all duration-300 disabled:opacity-50"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <style jsx global>{`
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700&display=swap');
+
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        
+        @keyframes focusSlideUp {
+          from {
+            transform: translateY(0);
+          }
+          to {
+            transform: translateY(-4px);
+          }
+        }
+        
+        @keyframes promptSlideUp {
+          0% {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          20%, 80% {
+            opacity: 1;
+            transform: translateY(0);
+          }
+          100% {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+        }
+        
+        @keyframes gentleShake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-2px); }
+          75% { transform: translateX(2px); }
+        }
+
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: .5;
+          }
+        }
+
+        @keyframes loadingSpin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+        
+        .message-animation {
+          animation: slideIn 0.3s ease-out forwards;
+        }
+        
+        .input-container:focus-within {
+          transform: translateY(-4px);
+          box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .prompt-animation {
+          animation: promptSlideUp 3s infinite;
+        }
+        
+        .shake-animation {
+          animation: gentleShake 0.5s ease-in-out;
+        }
+
+        .recording-pulse {
+          animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .loading-spin {
+          animation: loadingSpin 1s linear infinite;
+        }
+
+        .font-noto-nastaliq {
+          font-family: 'Noto Nastaliq Urdu', serif;
+        }
+
+        .font-noto-devanagari {
+          font-family: 'Noto Sans Devanagari', sans-serif;
+        }
+
+        .font-noto-tamil {
+          font-family: 'Noto Sans Tamil', sans-serif;
+        }
+
+        .font-noto-telugu {
+          font-family: 'Noto Sans Telugu', sans-serif;
+        }
+
+        .font-noto-bengali {
+          font-family: 'Noto Sans Bengali', sans-serif;
+        }
+
+        .font-noto-arabic {
+          font-family: 'Noto Sans Arabic', sans-serif;
+        }
+        
+        @media (max-width: 640px) {
+          .input-container {
+            padding: 0.75rem;
+          }
+          
+          .input-container input {
+            font-size: 0.875rem;
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+export default MainComponent;
